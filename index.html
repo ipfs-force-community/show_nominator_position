@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subsign - Nominator Position</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 2rem; line-height: 1.5; }
+      h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+      form { display: grid; gap: 0.75rem; max-width: 720px; }
+      label { display: grid; gap: 0.25rem; }
+      input, select, button { font-size: 1rem; padding: 0.5rem 0.6rem; }
+      button { cursor: pointer; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+      .hint { font-size: 0.9rem; opacity: 0.8; }
+      .error { color: #c62828; white-space: pre-wrap; }
+      .success { color: #2e7d32; }
+      .muted { opacity: 0.75; }
+      pre { background: rgba(127,127,127,0.08); padding: 0.75rem; border-radius: 8px; overflow: auto; max-width: 100%; }
+      footer { margin-top: 2rem; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Nominator Position (Domains Runtime API)</h1>
+    <p class="hint">Calls the runtime API to fetch a nominator's complete staking position for an operator. Runs entirely in your browser.</p>
+
+    <form id="form">
+      <div class="row">
+        <label>
+          Network ID
+          <input id="networkId" name="networkId" value="mainnet" placeholder="e.g. mainnet" required />
+        </label>
+        <label>
+          Operator ID (u64)
+          <input id="operatorId" name="operatorId" type="number" min="0" step="1" value="1" required />
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          WS Endpoint (optional)
+          <input id="wsEndpoint" name="wsEndpoint" placeholder="wss://rpc.mainnet.subspace.foundation/ws" />
+        </label>
+        <label style="align-self:end; display: flex; gap: 0.5rem; align-items: center;">
+          <input id="forceDirect" name="forceDirect" type="checkbox" checked />
+          Use direct @polkadot/api
+        </label>
+      </div>
+      <label>
+        Nominator Address (SS58)
+        <input id="nominator" name="nominator" placeholder="Enter SS58 address" required />
+      </label>
+      <div class="row">
+        <label>
+          Method override (optional)
+          <input id="methodName" name="methodName" placeholder="DomainsApi_nominator_position or DomainsApi_nominatorPosition" />
+        </label>
+        <span class="hint" style="align-self:end">Leave blank to auto-detect. Requires compatible chain runtime.</span>
+      </div>
+      <button id="submit" type="submit">Query Position</button>
+      <div id="status" class="muted"></div>
+    </form>
+
+    <h2>Result</h2>
+    <pre id="output">{}</pre>
+
+    <footer class="muted">
+      Hosted via GitHub Pages. Uses @autonomys/auto-sdk over ESM CDN.
+    </footer>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("status");
+      const outputEl = $("output");
+      const submitBtn = $("submit");
+
+      async function loadSdk() {
+        // Use published packages directly
+        const utils = await import('https://cdn.jsdelivr.net/npm/@autonomys/auto-utils/+esm');
+        const consensus = await import('https://cdn.jsdelivr.net/npm/@autonomys/auto-consensus/+esm');
+        return { activate: utils.activate, nominatorPosition: consensus.nominatorPosition };
+      }
+
+      async function initCrypto() {
+        try {
+          const { cryptoWaitReady } = await import('https://cdn.jsdelivr.net/npm/@polkadot/util-crypto/+esm');
+          await cryptoWaitReady();
+        } catch (e) {
+          // Continue even if crypto init fails; SDK may handle internally
+          console.warn('crypto init warning:', e);
+        }
+      }
+
+      async function connectViaPolkadot(wsEndpoint) {
+        const { ApiPromise, WsProvider } = await import('https://cdn.jsdelivr.net/npm/@polkadot/api/+esm');
+        const provider = new WsProvider(wsEndpoint);
+        const api = await ApiPromise.create({ provider });
+        await api.isReady;
+        return api;
+      }
+
+      function setStatus(msg, kind = 'info') {
+        statusEl.textContent = msg || '';
+        statusEl.className = kind === 'error' ? 'error' : (kind === 'success' ? 'success' : 'muted');
+      }
+
+      function toDisplay(value) {
+        try {
+          if (value && typeof value.toHuman === 'function') return value.toHuman();
+          if (value && typeof value.toJSON === 'function') return value.toJSON();
+          return value;
+        } catch {
+          return value;
+        }
+      }
+
+      function setOutput(obj) {
+        const display = toDisplay(obj);
+        try {
+          outputEl.textContent = JSON.stringify(display, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
+        } catch {
+          try { outputEl.textContent = String(display); }
+          catch { outputEl.textContent = String(obj); }
+        }
+      }
+
+      async function queryPosition(ev) {
+        ev.preventDefault();
+        submitBtn.disabled = true;
+        setStatus('Initializing crypto & loading SDK...');
+        setOutput({});
+
+        try {
+          const networkId = $("networkId").value.trim();
+          const operatorId = $("operatorId").value.trim();
+          const nominator = $("nominator").value.trim();
+          const methodName = $("methodName").value.trim();
+          const wsEndpoint = $("wsEndpoint").value.trim();
+          const forceDirect = $("forceDirect").checked;
+
+          await initCrypto();
+          let api;
+          if (forceDirect || wsEndpoint) {
+            const endpoint = wsEndpoint || (networkId === 'taurus' ? 'wss://taurus.rpc.subspace.network/ws' : 'wss://rpc.mainnet.subspace.foundation/ws');
+            setStatus(`Connecting (direct) to ${endpoint} ...`);
+            api = await connectViaPolkadot(endpoint);
+          } else {
+            const { activate, nominatorPosition: sdkNP } = await loadSdk();
+            setStatus(`Connecting to network: ${networkId} ...`);
+            const activated = await activate({ networkId });
+            api = activated?.api || activated; // some builds return { api }
+            try { if (api?.isReady) { await api.isReady; } } catch {}
+          }
+
+          setStatus('Calling runtime API...');
+          async function callRuntimePosition() {
+            if (!api) throw new Error('API not initialized');
+            const runtimeApis = api?.call ? Object.keys(api.call) : [];
+            if (!api?.call?.domainsApi?.nominatorPosition) {
+              throw new Error('api.call.domainsApi.nominatorPosition is unavailable on this network. Available runtime APIs: ' + runtimeApis.join(', '));
+            }
+            const opParam = (() => { try { return BigInt(operatorId); } catch { return Number(operatorId); } })();
+            const acctParam = nominator; // SS58 string; api will encode to AccountId32
+            const res = await api.call.domainsApi.nominatorPosition(opParam, acctParam);
+            if (res && res.isNone) return null;
+            return res && res.unwrap ? res.unwrap() : res;
+          }
+
+          let position;
+          try {
+            // Try direct runtime call first when using direct API; otherwise prefer SDK helper
+            if (forceDirect || wsEndpoint) {
+              position = await callRuntimePosition();
+            } else {
+              const { nominatorPosition: sdkNP } = await loadSdk();
+              if (typeof sdkNP === 'function') {
+                position = await sdkNP(api, operatorId, nominator);
+              } else {
+                position = await callRuntimePosition();
+              }
+            }
+          } catch (err) {
+            console.warn('SDK helper failed, falling back to direct runtime call:', err);
+            position = await callRuntimePosition();
+          }
+
+          setOutput(position);
+          setStatus('Done', 'success');
+        } catch (err) {
+          console.error(err);
+          setStatus(err?.message || String(err), 'error');
+        } finally {
+          submitBtn.disabled = false;
+        }
+      }
+
+      document.getElementById('form').addEventListener('submit', queryPosition);
+    </script>
+  </body>
+  </html>
+
+
+
+
