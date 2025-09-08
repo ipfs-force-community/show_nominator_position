@@ -1,0 +1,1 @@
+[![pages-build-deployment](https://github.com/ipfs-force-community/show_nominator_position/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/ipfs-force-community/show_nominator_position/actions/workflows/pages/pages-build-deployment)
